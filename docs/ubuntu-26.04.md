@@ -85,34 +85,9 @@ drop-ins.
 
 ## KDE / PAM
 
-Do **not** enable the distro's global fprintd PAM profile
-(`pam-auth-update --enable fprintd`). It puts `pam_fprintd` in `common-auth`, so every
-password check (lock screen, polkit, login) first waits up to 10 s for a finger. Plasma
-does not need it: the lock screen uses its own fingerprint-only PAM service,
-`/usr/lib/pam.d/kde-fingerprint`, which already worked with no PAM changes.
-
-**SDDM is the exception and has an inherent limit.** The greeter collects username and
-password and only starts PAM on Enter, so it can never show a fingerprint prompt or light
-the reader on its own. To use the finger: type the username, leave the password empty, press
-Enter, then touch the sensor. To keep that without slowing down typed passwords, and to keep
-the `pam_kwallet5` / `pam_gnome_keyring` lines after `common-auth` running (a `success=done`
-would skip them), put this before `@include common-auth` in `/etc/pam.d/sddm`:
-
-```
-auth    [success=3 default=ignore]      pam_unix.so try_first_pass
-auth    [success=2 default=ignore]      pam_fprintd.so max-tries=1 timeout=10
-```
-
-The jump counts assume `common-auth` is `pam_unix`, `pam_deny`, `pam_permit`, `pam_cap`;
-re-check them after any `pam-auth-update`. Keep a text console (Ctrl+Alt+F3) handy while
-editing PAM, and a backup of `/etc/pam.d`.
-
-**KWallet.** A fingerprint login never supplies the login password, so KWallet cannot be
-unlocked by it and prompts afterwards. KWallet is not only for explicit passwords:
-Chromium-family browsers and Electron apps keep their "Safe Storage" key there, so disabling
-the wallet subsystem makes their saved data unreadable. Setting an empty wallet password
-removes the prompt without losing anything (at the cost of those keys being stored without a
-wallet password).
+The lock screen needed no PAM changes; SDDM needs a two-line stack and has an inherent
+limit, and the distro's global fprintd PAM profile should stay disabled. KWallet also needs a
+decision. All of that is written up distro-neutrally in [kde-pam.md](kde-pam.md).
 
 ## Notes
 

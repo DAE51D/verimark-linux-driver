@@ -40,6 +40,7 @@ enumerate or garbage-collect prints on the device. Details in
   list yourself (see below) and run the setup script with `--skip-deps`.
   Ubuntu 26.04 was also tested on hardware; apt package list and KDE/PAM notes
   are in [`docs/ubuntu-26.04.md`](docs/ubuntu-26.04.md).
+  Wiring it into KDE (lock screen, SDDM, KWallet) is covered in [`docs/kde-pam.md`](docs/kde-pam.md).
 - **`sudo` access** — both scripts need it (`dnf install`, and the `fprintd`
   drop-in / udev-rule install).
 - **Network access** — the setup script clones upstream `libfprint`
