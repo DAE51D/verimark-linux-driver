@@ -54,6 +54,54 @@ writes the new host key + sensor certs to
 > (`Uriziel01/kensington-verimark-desktop-linux` `tools/verimark_pair.py`) is
 > the fallback.
 
+### Already using the clean-room driver (`../driver/`)? Migrate, don't re-pair
+
+If you enrolled with the clean-room driver, this machine already **owns** the key
+through `/var/lib/fprint/verimark/<sid>.pdata`. Running `install.sh` and then
+`fprintd-enroll` would make `synatlsmoc` generate *new* credentials and pair a
+second time. Whether that replaces the existing owner (as the note above says
+for Windows) or only joins as a non-owner (as `findings/35` suggests for an
+already-owned slot) was not tested on an owned key. You can sidestep the question:
+`synatlsmoc` stores the same objects (host cert, sensor cert, P-256 private
+key) in a different container, so the old credential can be converted and the
+driver opens the key as the existing owner, with no pairing at all.
+
+```bash
+# 1. install as usual, but do NOT enroll yet (a first open with no pairing file pairs)
+sudo ./install.sh
+
+# 2. convert the old credential; the state dir is root-only (0700), so use sudo
+sudo python3 -I tools/migrate-cleanroom-pdata.py \
+    /var/lib/fprint/verimark/<sid>.pdata \
+    /var/lib/fprint/verimark/047d-00f2/libfprint-persistent.bin
+
+# 3. enroll your fingers under the new driver (prints do not carry over)
+fprintd-enroll -f right-index-finger
+fprintd-verify -f right-index-finger
+```
+
+The tool refuses to write anything unless the private key derives exactly the
+public key inside the host certificate, never overwrites an existing output, and
+prints only PASS/FAIL lines. `python3 -I tools/migrate-cleanroom-pdata.py --self-test`
+exercises it with synthetic keys and no hardware. Needs `python3-gi` and
+`python3-cryptography`.
+
+Things to know:
+
+- **Keep the original `.pdata`** (and back it up off the machine; it is a private key).
+  It is the owner identity for *both* drivers, and the only way back to the clean-room
+  driver. Roll back with `sudo ./install.sh --uninstall` plus the old driver's
+  `driver/install-verimark.sh`.
+- Prints enrolled under the clean-room driver are not visible to `synatlsmoc` (fprintd
+  keys them by driver), so re-enroll. Whether `synatlsmoc`'s device-side delete also
+  clears the old on-chip templates was not checked.
+- fprintd finger names are only labels. Touching a different finger than the one you
+  named enrolls that finger under the wrong label; `fprintd-delete <user> -f <name>`
+  and re-enroll fixes it.
+- Verified on a Kubuntu 26.04 unit: the log shows `Loading pairing data from persistent
+  storage` then `Sensor certificate is valid` and never `Need to pair sensor`; enroll,
+  verify and delete worked, as did lock-screen and SDDM unlock through PAM.
+
 ### Reverting
 
 ```bash
