@@ -49,21 +49,21 @@ pkg-config module, and on Debian/Ubuntu `udev.pc` ships in `systemd-dev`, not in
 
 ## Build and install
 
-`setup-libfprint-build.sh` calls `dnf`, so skip its dependency step. There is also no
-`v1.95.1` tag upstream (Ubuntu's 1.95.1 is a development snapshot), so use the default
-clone of `main`, or pass a checkout:
+`setup-libfprint-build.sh` installs the dependencies above itself when it finds `apt-get`
+(and no `dnf`). There is no `v1.95.1` tag upstream (Ubuntu's 1.95.1 is a development
+snapshot), so use the default clone of `main`:
 
 ```sh
-git clone --depth 1 https://gitlab.freedesktop.org/libfprint/libfprint.git ~/verimark-build/upstream-libfprint
-
-./driver/setup-libfprint-build.sh --skip-deps --skip-udev --drivers=default \
-  --work-dir ~/verimark-build --libfprint-src ~/verimark-build/upstream-libfprint
-
+./driver/setup-libfprint-build.sh --drivers=default
 ./driver/install-verimark.sh   # defaults to ~/verimark-build/libfprint/build
 ```
 
 `--drivers=default` builds every stock driver plus `verimark`, so other readers keep
-working. The SELinux relabel step is skipped automatically (Ubuntu uses AppArmor; no
+working. (What was actually run here: `--skip-udev --work-dir ~/verimark-build --libfprint-src
+~/verimark-build/upstream-libfprint` on a manual clone of `main`, with the dependencies
+installed by hand; the apt branch of the script was then exercised separately, as a no-op
+because the packages were already present. The bare invocation above is the same thing
+with defaults and was not run end to end.) The SELinux relabel step is skipped automatically (Ubuntu uses AppArmor; no
 AppArmor changes were needed). Offline tests (`meson test`) pass.
 
 Check it took effect:
