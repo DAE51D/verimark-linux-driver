@@ -38,6 +38,8 @@ enumerate or garbage-collect prints on the device. Details in
   dependencies with `dnf`. It was developed and verified on **Fedora 44**. On
   Debian/Arch/etc. the build still works, but you must translate the package
   list yourself (see below) and run the setup script with `--skip-deps`.
+  Ubuntu 26.04 was also tested on hardware; apt package list and KDE/PAM notes
+  are in [`docs/ubuntu-26.04.md`](docs/ubuntu-26.04.md).
 - **`sudo` access** — both scripts need it (`dnf install`, and the `fprintd`
   drop-in / udev-rule install).
 - **Network access** — the setup script clones upstream `libfprint`
