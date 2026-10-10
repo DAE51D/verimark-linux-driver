@@ -91,11 +91,15 @@ decision. All of that is written up distro-neutrally in [kde-pam.md](kde-pam.md)
 
 ## Notes
 
-- The reader's white LED lights while the driver waits for a touch and turns off when a frame
-  arrives. It uses the `0x39` LED_EX2 command (frames from the Windows capture, findings/25),
-  is purely cosmetic, and any LED error is ignored so it can never fail a login. Set
-  `VERIMARK_LED=0` in `fprintd`'s environment to disable all LED traffic. The wait that
-  matters is the frame wait (`CAP_FRAME_ACQ`/`CAP_WAIT_FRAME`): `CAP_WAIT_PRESS` passes
-  immediately with no touch, so lighting the LED around it is invisible.
+- The reader's white LED lights while the driver waits for a touch and turns off once the
+  frame wait ends (or the press wait times out). It uses the `0x39` LED_EX2 command (frames
+  from the Windows capture, findings/25), is purely cosmetic, and any LED error is ignored so
+  it can never fail a login. Set `VERIMARK_LED=0` in `fprintd`'s environment to disable all
+  LED traffic. It is switched on at `CAP_ARM_PRESS`, before the press wait. On this unit
+  `CAP_WAIT_PRESS` returned immediately even with no touch, so the real wait is the frame wait
+  (`CAP_FRAME_ACQ`/`CAP_WAIT_FRAME`) and the LED stays lit through it until `CAP_EVENT_CLEAR`.
+  A first attempt that turned it off again right after the press wait was invisible
+  (milliseconds). The press-timeout path (`no finger detected`) turns the LED off too, but
+  that path could not be reached on this unit and is untested on hardware.
 - Pairing was a non-event on a factory-fresh unit, but it is one-way, as the READMEs say. We
   did not test what happens when a unit that was previously paired elsewhere is used.

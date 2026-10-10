@@ -626,12 +626,33 @@ on_cap_event_config_done (FpDevice *dev, guint16 status, const guint8 *resp, gsi
   fpi_ssm_next_state (ssm);
 }
 
+static gboolean cap_led_enabled (void);
+
+/* The press wait timed out with the "waiting" LED on (CAP_ARM_PRESS): turn it
+ * off, then fail exactly as before. An LED error here is irrelevant — we are
+ * already failing — so it is deliberately ignored. */
 static void
-on_cap_wait_press_done (FpDevice *dev, gboolean got, guint8 seq, GError *error, gpointer user_data)
+on_cap_press_timeout_led_off_done (FpDevice *dev, guint16 status, const guint8 *resp,
+                                   gsize resp_len, GError *error, gpointer user_data)
 {
   FpiSsm *ssm = user_data;
 
   (void) dev;
+  (void) status;
+  (void) resp;
+  (void) resp_len;
+
+  g_clear_error (&error);
+  fpi_ssm_mark_failed (ssm, fpi_device_retry_new_msg (FP_DEVICE_RETRY_GENERAL,
+                                                      "no finger detected"));
+}
+
+static void
+on_cap_wait_press_done (FpDevice *dev, gboolean got, guint8 seq, GError *error, gpointer user_data)
+{
+  FpiSsm *ssm = user_data;
+  VerimarkCaptureCtx *ctx = fpi_ssm_get_data (ssm);
+
   (void) seq;
 
   if (error != NULL)
@@ -645,6 +666,15 @@ on_cap_wait_press_done (FpDevice *dev, gboolean got, guint8 seq, GError *error, 
        * no press before the deadline; report as a retry-able condition
        * rather than a hard protocol error (mirrors goodixmoc's
        * FP_DEVICE_RETRY_GENERAL capture-failure idiom). */
+      if (cap_led_enabled ())
+        {
+          guint8 cmd[VERIMARK_LED_EX2_CMD_LEN];
+          gsize len = verimark_moc_build_led_ex2 (cmd, VERIMARK_LED_OFF);
+
+          verimark_moc_send (dev, cmd, len, 2, ctx->cancellable,
+                             on_cap_press_timeout_led_off_done, ssm);
+          return;
+        }
       fpi_ssm_mark_failed (ssm, fpi_device_retry_new_msg (FP_DEVICE_RETRY_GENERAL,
                                                           "no finger detected"));
       return;
@@ -813,7 +843,7 @@ on_cap_led_waiting_done (FpDevice *dev, guint16 status, const guint8 *resp, gsiz
   if (status != 0x0000)
     g_debug ("LED_EX2 (waiting) status 0x%04x — ignored", status);
 
-  cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_FRAME);
+  cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_FINGER);
 }
 
 static void
@@ -844,8 +874,26 @@ capture_ssm_handler (FpiSsm *ssm, FpDevice *dev)
   switch (fpi_ssm_get_cur_state (ssm))
     {
     case CAP_ARM_PRESS:
-      cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_FINGER);
-      break;
+      {
+        /* LED on ("touch now") BEFORE the press wait, then arm for the press (see
+         * on_cap_led_waiting_done). Where CAP_WAIT_PRESS blocks until a touch this
+         * is the prompt; where it passes immediately (observed on a Kubuntu 26.04
+         * unit) the LED simply stays lit through the frame wait until
+         * CAP_EVENT_CLEAR. */
+        guint8 cmd[VERIMARK_LED_EX2_CMD_LEN];
+        gsize len;
+
+        if (!cap_led_enabled ())
+          {
+            cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_FINGER);
+            break;
+          }
+        len = verimark_moc_build_led_ex2 (cmd, VERIMARK_LED_WAITING);
+
+        verimark_moc_send (dev, cmd, len, 2, ctx->cancellable,
+                           on_cap_led_waiting_done, ssm);
+        break;
+      }
 
     case CAP_WAIT_PRESS:
       /* Wait for the FINGER_PRESS (0x01) directly — matching the proven Python
@@ -870,24 +918,8 @@ capture_ssm_handler (FpiSsm *ssm, FpDevice *dev)
       break;
 
     case CAP_ARM_FRAME:
-      {
-        /* The sensor's real "waiting for the finger" window is the frame wait
-         * (CAP_FRAME_ACQ..CAP_WAIT_FRAME): CAP_WAIT_PRESS passes at once (see its
-         * comment). So the LED goes on here and off in CAP_EVENT_CLEAR. */
-        guint8 cmd[VERIMARK_LED_EX2_CMD_LEN];
-        gsize len;
-
-        if (!cap_led_enabled ())
-          {
-            cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_FRAME);
-            break;
-          }
-        len = verimark_moc_build_led_ex2 (cmd, VERIMARK_LED_WAITING);
-
-        verimark_moc_send (dev, cmd, len, 2, ctx->cancellable,
-                           on_cap_led_waiting_done, ssm);
-        break;
-      }
+      cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_FRAME);
+      break;
 
     case CAP_FRAME_ACQ:
       {
