@@ -59,7 +59,7 @@ git clone --depth 1 https://gitlab.freedesktop.org/libfprint/libfprint.git ~/ver
 ./driver/setup-libfprint-build.sh --skip-deps --skip-udev --drivers=default \
   --work-dir ~/verimark-build --libfprint-src ~/verimark-build/upstream-libfprint
 
-./driver/install-verimark.sh --build-dir ~/verimark-build/libfprint/build
+./driver/install-verimark.sh   # defaults to ~/verimark-build/libfprint/build
 ```
 
 `--drivers=default` builds every stock driver plus `verimark`, so other readers keep
@@ -82,9 +82,6 @@ another experimental driver sorted after `10-verimark-libfprint.conf`, so `fprin
 loading the wrong library and reported "No devices available" with no error. If
 `systemctl show fprintd -p Environment` does not show the verimark path, look for other
 drop-ins.
-
-**`install-verimark.sh` has a hard-coded default `--build-dir`** (`/home/sshadows/...`).
-Pass `--build-dir` explicitly unless your path happens to match.
 
 ## KDE / PAM
 
