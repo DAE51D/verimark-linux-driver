@@ -57,9 +57,11 @@ writes the new host key + sensor certs to
 ### Already using the clean-room driver (`../driver/`)? Migrate, don't re-pair
 
 If you enrolled with the clean-room driver, this machine already **owns** the key
-through `/var/lib/fprint/verimark/<sid>.pdata`. Running `install.sh` and then
-`fprintd-enroll` would make `synatlsmoc` generate *new* credentials and pair a
-second time. Whether that replaces the existing owner (as the note above says
+through `/var/lib/fprint/verimark/<sid>.pdata`. Once `synatlsmoc` is installed
+with no pairing file, the first thing that opens the key makes it generate *new*
+credentials and pair a second time. That is not only `fprintd-enroll`: `fprintd`
+starts on demand, so a lock-screen unlock or a login can be that first open.
+Whether the second pairing replaces the existing owner (as the note above says
 for Windows) or only joins as a non-owner (as `findings/35` suggests for an
 already-owned slot) was not tested on an owned key. You can sidestep the question:
 `synatlsmoc` stores the same objects (host cert, sensor cert, P-256 private
@@ -67,18 +69,25 @@ key) in a different container, so the old credential can be converted and the
 driver opens the key as the existing owner, with no pairing at all.
 
 ```bash
-# 1. install as usual, but do NOT enroll yet (a first open with no pairing file pairs)
-sudo ./install.sh
-
-# 2. convert the old credential; the state dir is root-only (0700), so use sudo
+# 1. BEFORE installing, with the clean-room driver still in place: create the root-only
+#    state dir and convert the old credential into it (use sudo; the dir is 0700)
+sudo install -d -m 0700 -o root -g root /var/lib/fprint/verimark/047d-00f2
 sudo python3 -I tools/migrate-cleanroom-pdata.py \
     /var/lib/fprint/verimark/<sid>.pdata \
     /var/lib/fprint/verimark/047d-00f2/libfprint-persistent.bin
+
+# 2. only now install synatlsmoc; it replaces the clean-room install and leaves the
+#    converted file in place (its own `install -d` does not touch existing contents)
+sudo ./install.sh
 
 # 3. enroll your fingers under the new driver (prints do not carry over)
 fprintd-enroll -f right-index-finger
 fprintd-verify -f right-index-finger
 ```
+
+The order matters. With the converted file already present, the new driver's very
+first open finds the pairing data and skips pairing; installing first leaves a
+window where it has none.
 
 The tool refuses to write anything unless the private key derives exactly the
 public key inside the host certificate, never overwrites an existing output, and

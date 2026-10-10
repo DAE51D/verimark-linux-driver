@@ -45,6 +45,8 @@ from cryptography.hazmat.primitives.asymmetric import ec
 CERT_LEN = 400
 SCALAR_FIELD = 0x44          # 68-byte little-endian field
 PDATA_LEN = SCALAR_FIELD + 2 * CERT_LEN   # 868
+# Order n of the NIST P-256 (secp256r1) group: a valid private scalar is 1 <= d < n.
+P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 DRIVER_ID = "synatlsmoc"
 DEVICE_ID = "0"
 
@@ -72,9 +74,12 @@ def convert(buf):
     print("PASS: both certs have the expected magic (0x5f3f) and curve (23 = P-256)")
 
     scalar = le_int(buf[0:SCALAR_FIELD])
-    if not 0 < scalar < 2 ** 256:
-        raise Fail("private scalar out of range")
-    key = ec.derive_private_key(scalar, ec.SECP256R1())
+    if not 0 < scalar < P256_ORDER:
+        raise Fail("private scalar is not a valid P-256 key (must be 1 <= d < the curve order)")
+    try:
+        key = ec.derive_private_key(scalar, ec.SECP256R1())
+    except ValueError as e:      # belt and braces: never let a library error become a traceback
+        raise Fail(f"private scalar rejected by the crypto library: {e}")
 
     pub = key.public_key().public_numbers()
     if (pub.x, pub.y) != (le_int(host_cert[4:72]), le_int(host_cert[72:140])):
@@ -145,6 +150,16 @@ def self_test():
         print("PASS: rejected:", e)
     else:
         raise SystemExit("FAIL: mismatched key was accepted")
+    print("== self-test: out-of-range scalars (0, n, 2**256-1) must be rejected ==")
+    for bad in (0, P256_ORDER, 2 ** 256 - 1):
+        blob = bytearray(synth_pdata())
+        blob[0:SCALAR_FIELD] = bad.to_bytes(SCALAR_FIELD, "little")
+        try:
+            convert(bytes(blob))
+        except Fail as e:
+            print(f"PASS: scalar {'0' if bad == 0 else hex(bad)[:12] + '...'} rejected: {e}")
+        else:
+            raise SystemExit(f"FAIL: out-of-range scalar {bad:#x} was accepted")
     print("== self-test: wrong length must be rejected ==")
     try:
         convert(b"\0" * 10)
