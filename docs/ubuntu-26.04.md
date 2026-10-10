@@ -26,6 +26,7 @@ below was done on real hardware; where something was *not* tested it says so.
 | Plasma lock-screen unlock | Works |
 | SDDM login | Works, with the caveat below |
 | `sudo` | Not tested (passwordless sudo on this machine) |
+| "Touch now" LED (white, front of the key) | Works (lights while waiting for a touch) |
 | Delete / clear storage | Not tested |
 
 `fprintd-list` showed "No devices available" before the driver was installed, and
@@ -118,8 +119,11 @@ wallet password).
 
 ## Notes
 
-- The reader's white LED stays off with this driver: `VERIMARK_CMD_LED_EX2` is defined but
-  never sent. It is purely cosmetic (the LED is not needed to capture), but there is no
-  "touch now" cue.
+- The reader's white LED lights while the driver waits for a touch and turns off when a frame
+  arrives. It uses the `0x39` LED_EX2 command (frames from the Windows capture, findings/25),
+  is purely cosmetic, and any LED error is ignored so it can never fail a login. Set
+  `VERIMARK_LED=0` in `fprintd`'s environment to disable all LED traffic. The wait that
+  matters is the frame wait (`CAP_FRAME_ACQ`/`CAP_WAIT_FRAME`): `CAP_WAIT_PRESS` passes
+  immediately with no touch, so lighting the LED around it is invisible.
 - Pairing was a non-event on a factory-fresh unit, but it is one-way, as the READMEs say. We
   did not test what happens when a unit that was previously paired elsewhere is used.

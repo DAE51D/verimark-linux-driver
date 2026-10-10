@@ -95,6 +95,37 @@ verimark_moc_build_frame_finish (guint8 out[1])
   return 1;
 }
 
+/* 0x39 LED_EX2 (125 B): [0]=0x39, [2:4]=u16 animation length, then six 20-byte
+ * LED frames at [5:125]. WAITING = three copies of one steady frame; OFF = all
+ * frames zero except the 0x20 flag byte at +7. Bytes copied from the Windows
+ * enroll capture (findings/25) / synatlsmoc's kensington_transport.c. */
+gsize
+verimark_moc_build_led_ex2 (guint8 out[VERIMARK_LED_EX2_CMD_LEN], VerimarkLedEvent event)
+{
+  static const guint8 waiting_block[20] = {
+    0xff, 0xff, 0x00, 0x00, 0x05, 0x7f, 0x00, 0x20, 0x00, 0x00,
+    0x00, 0x00, 0x7f, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  };
+  guint i;
+
+  memset (out, 0, VERIMARK_LED_EX2_CMD_LEN);
+  out[0] = 0x39;   /* LED_EX2 */
+
+  if (event == VERIMARK_LED_WAITING)
+    {
+      out[2] = 0x71;
+      out[3] = 0x02;
+      for (i = 0; i < 3; i++)
+        memcpy (out + 5 + i * sizeof (waiting_block), waiting_block, sizeof (waiting_block));
+    }
+  else
+    {
+      for (i = 0; i < 6; i++)
+        out[5 + i * 20 + 7] = 0x20;
+    }
+  return VERIMARK_LED_EX2_CMD_LEN;
+}
+
 /* p2_moc.py:52-53 WIN_FINALIZE — 124 B. [19:35] carries the sensor-minted
  * template-id (overwritten at build time); [49:77] carries a 28-byte
  * Windows SID (also overwritten). Everything else is an opaque, unexplained
@@ -739,6 +770,72 @@ on_cap_frame_finish_done (FpDevice *dev, guint16 status, const guint8 *resp, gsi
                                                         "no usable frame (0x18 not observed)"));
 }
 
+/* LED feedback is chained *ahead of* the event-config command in the same SSM
+ * state (never fire-and-forget): every command shares one TLS record sequence
+ * over a single control pipe, so a concurrent send would corrupt the channel.
+ * The LED is cosmetic — a non-zero status is ignored; only a transport/TLS
+ * error (which would break the next command too) fails the capture. */
+/* Kill switch / A-B test aid: VERIMARK_LED=0 in fprintd's environment disables
+ * all LED traffic (capture then behaves exactly as before LED support). */
+static gboolean
+cap_led_enabled (void)
+{
+  const char *e = g_getenv ("VERIMARK_LED");
+
+  return !(e != NULL && e[0] == '0');
+}
+
+static void
+cap_send_event_config (FpDevice *dev, FpiSsm *ssm, guint32 mask)
+{
+  VerimarkCaptureCtx *ctx = fpi_ssm_get_data (ssm);
+  guint8 cmd[VERIMARK_EVENT_CONFIG_CMD_LEN];
+  gsize len = build_event_config (cmd, mask);
+
+  verimark_moc_send (dev, cmd, len, VERIMARK_EVENT_CONFIG_RESP_LEN,
+                     ctx->cancellable, on_cap_event_config_done, ssm);
+}
+
+static void
+on_cap_led_waiting_done (FpDevice *dev, guint16 status, const guint8 *resp, gsize resp_len,
+                         GError *error, gpointer user_data)
+{
+  FpiSsm *ssm = user_data;
+
+  (void) resp;
+  (void) resp_len;
+
+  if (error != NULL)
+    {
+      fpi_ssm_mark_failed (ssm, error);
+      return;
+    }
+  if (status != 0x0000)
+    g_debug ("LED_EX2 (waiting) status 0x%04x — ignored", status);
+
+  cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_FRAME);
+}
+
+static void
+on_cap_led_off_done (FpDevice *dev, guint16 status, const guint8 *resp, gsize resp_len,
+                     GError *error, gpointer user_data)
+{
+  FpiSsm *ssm = user_data;
+
+  (void) resp;
+  (void) resp_len;
+
+  if (error != NULL)
+    {
+      fpi_ssm_mark_failed (ssm, error);
+      return;
+    }
+  if (status != 0x0000)
+    g_debug ("LED_EX2 (off) status 0x%04x — ignored", status);
+
+  cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_NONE);
+}
+
 static void
 capture_ssm_handler (FpiSsm *ssm, FpDevice *dev)
 {
@@ -747,14 +844,8 @@ capture_ssm_handler (FpiSsm *ssm, FpDevice *dev)
   switch (fpi_ssm_get_cur_state (ssm))
     {
     case CAP_ARM_PRESS:
-      {
-        guint8 cmd[VERIMARK_EVENT_CONFIG_CMD_LEN];
-        gsize len = build_event_config (cmd, VERIMARK_EVTMASK_FINGER);
-
-        verimark_moc_send (dev, cmd, len, VERIMARK_EVENT_CONFIG_RESP_LEN,
-                           ctx->cancellable, on_cap_event_config_done, ssm);
-        break;
-      }
+      cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_FINGER);
+      break;
 
     case CAP_WAIT_PRESS:
       /* Wait for the FINGER_PRESS (0x01) directly — matching the proven Python
@@ -780,11 +871,21 @@ capture_ssm_handler (FpiSsm *ssm, FpDevice *dev)
 
     case CAP_ARM_FRAME:
       {
-        guint8 cmd[VERIMARK_EVENT_CONFIG_CMD_LEN];
-        gsize len = build_event_config (cmd, VERIMARK_EVTMASK_FRAME);
+        /* The sensor's real "waiting for the finger" window is the frame wait
+         * (CAP_FRAME_ACQ..CAP_WAIT_FRAME): CAP_WAIT_PRESS passes at once (see its
+         * comment). So the LED goes on here and off in CAP_EVENT_CLEAR. */
+        guint8 cmd[VERIMARK_LED_EX2_CMD_LEN];
+        gsize len;
 
-        verimark_moc_send (dev, cmd, len, VERIMARK_EVENT_CONFIG_RESP_LEN,
-                           ctx->cancellable, on_cap_event_config_done, ssm);
+        if (!cap_led_enabled ())
+          {
+            cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_FRAME);
+            break;
+          }
+        len = verimark_moc_build_led_ex2 (cmd, VERIMARK_LED_WAITING);
+
+        verimark_moc_send (dev, cmd, len, 2, ctx->cancellable,
+                           on_cap_led_waiting_done, ssm);
         break;
       }
 
@@ -810,11 +911,19 @@ capture_ssm_handler (FpiSsm *ssm, FpDevice *dev)
 
     case CAP_EVENT_CLEAR:
       {
-        guint8 cmd[VERIMARK_EVENT_CONFIG_CMD_LEN];
-        gsize len = build_event_config (cmd, VERIMARK_EVTMASK_NONE);
+        /* Frame arrived (or the wait timed out): LED off, then clear the events. */
+        guint8 cmd[VERIMARK_LED_EX2_CMD_LEN];
+        gsize len;
 
-        verimark_moc_send (dev, cmd, len, VERIMARK_EVENT_CONFIG_RESP_LEN,
-                           ctx->cancellable, on_cap_event_config_done, ssm);
+        if (!cap_led_enabled ())
+          {
+            cap_send_event_config (dev, ssm, VERIMARK_EVTMASK_NONE);
+            break;
+          }
+        len = verimark_moc_build_led_ex2 (cmd, VERIMARK_LED_OFF);
+
+        verimark_moc_send (dev, cmd, len, 2, ctx->cancellable,
+                           on_cap_led_off_done, ssm);
         break;
       }
 
